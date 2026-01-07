@@ -29,7 +29,13 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	if err != nil {
 		return 0, false, err
 	}
-	h[fieldName] = fieldValue
+
+	value, ok := h[fieldName]
+	if ok {
+		h[fieldName] = value + ", " + fieldValue
+	} else {
+		h[fieldName] = fieldValue
+	}
 
 	return idx + 2, false, nil
 }
