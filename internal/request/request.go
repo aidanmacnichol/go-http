@@ -2,9 +2,10 @@ package request
 
 import (
 	"bytes"
-	"fmt"
-	"io"
 	"errors"
+	"fmt"
+	"go-http/internal/headers"
+	"io"
 	"strings"
 )
 
@@ -14,13 +15,15 @@ const crlf = "\r\n"
 type requestState int
 
 const (
-	readerStateInitialized requestState = iota 
-	readerStateDone        
+	readerStateInitialized requestState = iota
+	readerStateDone
+	readerStateParsingHeaders
 )
 
 type Request struct {
 	RequestLine RequestLine
-	state requestState
+	Headers     headers.Headers
+	state       requestState
 }
 
 type RequestLine struct {
@@ -31,7 +34,8 @@ type RequestLine struct {
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	req := &Request{
-		state: readerStateInitialized,
+		Headers: headers.NewHeaders(),
+		state:   readerStateInitialized,
 	}
 
 	buf := make([]byte, bufferSize, bufferSize)
@@ -47,8 +51,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		numBytesRead, err := reader.Read(buf[readToIdx:])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				req.state = readerStateDone
-				break
+				return nil, fmt.Errorf("Incomplete request. State: %d, read: %d bytes then got EOF", req.state, numBytesRead)
 			}
 			return nil, err
 		}
@@ -112,6 +115,22 @@ func requestLineFromString(str string) (*RequestLine, error) {
 }
 
 func (r *Request) parse(data []byte) (int, error) {
+	total := 0
+	for r.state != readerStateDone {
+		n, err := r.parseSingle(data[total:])
+		if err != nil {
+			return 0, err
+		}
+
+		if n == 0 {
+			break //More data needed
+		}
+		total += n
+	}
+	return total, nil
+}
+
+func (r *Request) parseSingle(data []byte) (int, error) {
 	switch r.state {
 	case readerStateInitialized:
 		requestLine, n, err := parseRequestLine(data)
@@ -122,12 +141,24 @@ func (r *Request) parse(data []byte) (int, error) {
 			return 0, nil
 		}
 		r.RequestLine = *requestLine
-		r.state = readerStateDone
+		r.state = readerStateParsingHeaders
 		return n, nil
+
+	case readerStateParsingHeaders:
+		n, done, err := r.Headers.Parse(data)
+		if err != nil {
+			return 0, err
+		}
+		if done {
+			r.state = readerStateDone
+		}
+		return n, nil
+
 	case readerStateDone:
-		return 0, fmt.Errorf("error: trying to reqad data in a done state")
+		return 0, fmt.Errorf("error: trying to read data in a done state")
+
 	default:
 		return 0, fmt.Errorf("unkown state")
+
 	}
 }
-
