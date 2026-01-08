@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go-http/internal/headers"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -16,14 +17,17 @@ type requestState int
 
 const (
 	readerStateInitialized requestState = iota
-	readerStateDone
 	readerStateParsingHeaders
+	readerStateParsingBody
+	readerStateDone
 )
 
 type Request struct {
-	RequestLine RequestLine
-	Headers     headers.Headers
-	state       requestState
+	RequestLine    RequestLine
+	Headers        headers.Headers
+	Body           []byte
+	bodyLengthRead int
+	state          requestState
 }
 
 type RequestLine struct {
@@ -35,10 +39,11 @@ type RequestLine struct {
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	req := &Request{
 		Headers: headers.NewHeaders(),
+		Body:    make([]byte, 0),
 		state:   readerStateInitialized,
 	}
 
-	buf := make([]byte, bufferSize, bufferSize)
+	buf := make([]byte, bufferSize)
 	readToIdx := 0
 
 	for req.state != readerStateDone {
@@ -117,6 +122,7 @@ func requestLineFromString(str string) (*RequestLine, error) {
 func (r *Request) parse(data []byte) (int, error) {
 	total := 0
 	for r.state != readerStateDone {
+
 		n, err := r.parseSingle(data[total:])
 		if err != nil {
 			return 0, err
@@ -150,6 +156,28 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 			return 0, err
 		}
 		if done {
+			r.state = readerStateParsingBody
+		}
+		return n, nil
+	case readerStateParsingBody:
+		n := len(data)
+		contentLenStr, ok := r.Headers.Get("Content-Length")
+		if !ok {
+			r.state = readerStateDone
+			return n, nil
+		}
+
+		contentLength, err := strconv.Atoi(contentLenStr)
+		if err != nil {
+			return 0, fmt.Errorf("Invalid Content-Length: %s", err)
+		}
+		r.Body = append(r.Body, data...)
+		r.bodyLengthRead += n
+
+		if r.bodyLengthRead > contentLength {
+			return 0, fmt.Errorf("Content-Length too large")
+		}
+		if r.bodyLengthRead == contentLength {
 			r.state = readerStateDone
 		}
 		return n, nil
