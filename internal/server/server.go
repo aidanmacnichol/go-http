@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"go-http/internal/request"
+	"go-http/internal/response"
 	"log"
 	"net"
 	"sync/atomic"
@@ -55,11 +56,10 @@ func (s *Server) handle(conn net.Conn) {
 		fmt.Printf("Error parsing request: %v\n", err.Error())
 		return
 	}
-	response := "HTTP/1.1 200 OK\r\n" +
-		"Content-Type: text/plain\r\n" +
-		"Content-Length: 13\r\n" +
-		"\r\n" +
-		"Hello World!\n"
+	response.WriteStatusLine(conn, response.StatusOK)
+	headers := response.GetDefaultHeaders(0)
+	if err := response.WriteHeaders(conn, headers); err != nil {
+		fmt.Printf("error: %v\n", err)
+	}
 
-	conn.Write([]byte(response))
 }
