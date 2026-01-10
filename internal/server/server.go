@@ -9,36 +9,40 @@ import (
 	"sync/atomic"
 )
 
+type Handler func(w *response.Writer, req *request.Request)
+
 type Server struct {
-	Listener net.Listener
-	Closed   atomic.Bool
+	listener net.Listener
+	closed   atomic.Bool
+	handler  Handler
 }
 
-func Serve(port int) (*Server, error) {
+func Serve(port int, handler Handler) (*Server, error) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, err
 	}
 	s := &Server{
-		Listener: listener,
+		listener: listener,
+		handler:  handler,
 	}
 	go s.listen()
 	return s, nil
 }
 
 func (s *Server) Close() error {
-	s.Closed.Store(true)
-	if s.Listener != nil {
-		return s.Listener.Close()
+	s.closed.Store(true)
+	if s.listener != nil {
+		return s.listener.Close()
 	}
 	return nil
 }
 
 func (s *Server) listen() {
 	for {
-		conn, err := s.Listener.Accept()
+		conn, err := s.listener.Accept()
 		if err != nil {
-			if s.Closed.Load() {
+			if s.closed.Load() {
 				return
 			}
 			log.Printf("Accept Error: %v", err)
@@ -51,15 +55,15 @@ func (s *Server) listen() {
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
 
-	_, err := request.RequestFromReader(conn)
+	w := response.NewWriter(conn)
+
+	req, err := request.RequestFromReader(conn)
 	if err != nil {
-		fmt.Printf("Error parsing request: %v\n", err.Error())
+		w.WriteStatusLine(response.StatusBadRequest)
+		body := []byte(fmt.Sprintf("Error parsing request: %v", err))
+		w.WriteHeaders(response.GetDefaultHeaders(len(body)))
+		w.WriteBody(body)
 		return
 	}
-	response.WriteStatusLine(conn, response.StatusOK)
-	headers := response.GetDefaultHeaders(0)
-	if err := response.WriteHeaders(conn, headers); err != nil {
-		fmt.Printf("error: %v\n", err)
-	}
-
+	s.handler(w, req)
 }
