@@ -1,12 +1,18 @@
 package main
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"go-http/internal/headers"
 	"go-http/internal/request"
 	"go-http/internal/response"
 	"go-http/internal/server"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -27,6 +33,10 @@ func main() {
 }
 
 func superCoolHandler(w *response.Writer, req *request.Request) {
+	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin") {
+		proxyHandler(w, req)
+		return
+	}
 	if req.RequestLine.RequestTarget == "/yourproblem" {
 		handler400(w, req)
 		return
@@ -92,4 +102,59 @@ func handler200(w *response.Writer, _ *request.Request) {
 	h.Override("Content-Type", "text/html")
 	w.WriteHeaders(h)
 	w.WriteBody(body)
+}
+
+func proxyHandler(w *response.Writer, req *request.Request) {
+	target := strings.TrimPrefix(req.RequestLine.RequestTarget, "/httpbin/")
+	url := "https://httpbin.org/" + target
+	resp, err := http.Get(url)
+	if err != nil {
+		handler500(w, req)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	w.WriteStatusLine(response.StatusOK)
+	h := response.GetDefaultHeaders(0)
+	h.Override("Transfer-Encoding", "chunked")
+	h.Remove("Content-Length")
+	h.Set("Trailer", "X-Content-SHA256, X-Content-Length")
+	w.WriteHeaders(h)
+
+	const maxChunkSize = 1024
+	fullBody := make([]byte, 0)
+	buffer := make([]byte, maxChunkSize)
+	for {
+		n, err := resp.Body.Read(buffer)
+		fmt.Println("Read", n, "byte")
+		if n > 0 {
+			_, err := w.WriteChunkedBody(buffer[:n])
+			fullBody = append(fullBody, buffer[:n]...)
+
+			if err != nil {
+				fmt.Println("error writing chunk: ", err)
+				break
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("error reading response body: ", err)
+			break
+		}
+	}
+	_, err = w.WriteChunkedBodyDone()
+
+	checksum := sha256.Sum256(fullBody)
+	length := len(fullBody)
+	trailerHeaders := headers.NewHeaders()
+	trailerHeaders.Set("X-Content-SHA256", fmt.Sprintf("%x", checksum))
+	trailerHeaders.Set("X-Content-Length", fmt.Sprintf("%d", length))
+	w.WriteTrailers(trailerHeaders)
+
+	if err != nil {
+		fmt.Println("error writing chunked done", err)
+	}
 }
