@@ -37,6 +37,9 @@ func superCoolHandler(w *response.Writer, req *request.Request) {
 		proxyHandler(w, req)
 		return
 	}
+	if req.RequestLine.RequestTarget == "/video" {
+		handlerVideo(w, req)
+	}
 	if req.RequestLine.RequestTarget == "/yourproblem" {
 		handler400(w, req)
 		return
@@ -157,4 +160,17 @@ func proxyHandler(w *response.Writer, req *request.Request) {
 	if err != nil {
 		fmt.Println("error writing chunked done", err)
 	}
+}
+
+func handlerVideo(w *response.Writer, _ *request.Request) {
+	video, err := os.ReadFile("assets/lol.mp4")
+	if err != nil {
+		fmt.Println("error loading video into memory: ", err)
+	}
+
+	w.WriteStatusLine(response.StatusOK)
+	h := response.GetDefaultHeaders(len(video))
+	h.Override("Content-Type", "video/mp4")
+	w.WriteHeaders(h)
+	w.WriteBody(video)
 }
